@@ -1,0 +1,16 @@
+{
+    "name": "keisukesaichi/api-dto",
+    "version": "1.0.0",
+    "autoload": {
+        "psr-4": {
+            "ApiDto\\": "ApiDto/"
+        }
+    },
+    "authors": [
+        {
+            "name": "twinkle-fff",
+            "email": "keisuke_saichi@genectbox.com"
+        }
+    ],
+    "require": {}
+}
