@@ -14,7 +14,7 @@ abstract readonly class BaseResponseDto
 
     protected function __construct(...$args)
     {
-        throw new LogicException(static::class." にコンストラクタが定義されていません。");
+        throw new LogicException(static::class . " にコンストラクタが定義されていません。");
     }
 
     /**
@@ -45,7 +45,6 @@ abstract readonly class BaseResponseDto
 
             $ctorArgs[$name] = self::castValueForProperty($prop, $data[$name]);
         }
-
         return new static(...$ctorArgs);
     }
 
@@ -108,7 +107,6 @@ abstract readonly class BaseResponseDto
         }
 
         $typeName = $type->getName();
-
         // null 許容
         if ($value === null) {
             if ($type->allowsNull()) {
@@ -175,51 +173,114 @@ abstract readonly class BaseResponseDto
      */
     private static function castArrayByDocblock(ReflectionProperty $prop, array $value): array
     {
-        $doc = (string)$prop->getDocComment();
+        $doc = (string) $prop->getDocComment();
+
         if ($doc === '') {
-            // Docが無ければそのまま
             return $value;
         }
 
-        // ざっくりジェネリクス抽出: <Type>
-        if (!preg_match('/@var\s+(?:list|array)\s*<\s*([\w\\\\]+)\s*>/u', $doc, $m)) {
+        if (
+            !preg_match(
+                '/@var\s+(?:list|array)\s*<\s*(?:[\w\\\\]+\s*,\s*)?([\w\\\\]+)\s*>/u',
+                $doc,
+                $m
+            )
+        ) {
             return $value;
         }
 
-        $elemType = $m[1];
+        $elemType = self::resolveDocblockTypeName($prop, $m[1]);
 
-        // Enum
-        if (enum_exists($elemType) && is_subclass_of($elemType, BackedEnum::class)) {
-            $out = [];
-            foreach ($value as $k => $v) {
+        // DTO / VO / Enum の配列を想定しているが、
+        // XML→JSONの都合で「1件だけだと連想配列」になる場合がある。
+        // その場合は 1件の list とみなして包む。
+        if (!array_is_list($value)) {
+            $value = [$value];
+        }
+
+        $out = [];
+
+        foreach ($value as $k => $v) {
+            if ($v === null) {
+                $out[$k] = null;
+                continue;
+            }
+
+            if (enum_exists($elemType) && is_subclass_of($elemType, BackedEnum::class)) {
                 $e = $elemType::tryFrom($v);
                 if ($e === null) {
-                    throw new LogicException(static::class . "::{$prop->getName()} の配列要素 Enum 変換に失敗しました。");
+                    throw new LogicException(
+                        static::class . "::{$prop->getName()}[$k] Enum {$elemType} 変換失敗"
+                    );
                 }
                 $out[$k] = $e;
+                continue;
             }
-            return $out;
-        }
 
-        // ValueObject
-        if (class_exists($elemType) && is_subclass_of($elemType, BaseValueObject::class)) {
-            $out = [];
-            foreach ($value as $k => $v) {
-                $out[$k] = $elemType::fromValue($v);
+            if (class_exists($elemType) && is_subclass_of($elemType, BaseValueObject::class)) {
+                try {
+                    $out[$k] = $elemType::fromValue($v);
+                } catch (\Throwable $e) {
+                    throw new LogicException(
+                        static::class . "::{$prop->getName()}[$k] ValueObject {$elemType} 変換失敗",
+                        0,
+                        $e
+                    );
+                }
+                continue;
             }
-            return $out;
-        }
 
-        // ResponseDto
-        if (class_exists($elemType) && is_subclass_of($elemType, self::class)) {
-            $out = [];
-            foreach ($value as $k => $v) {
+            if (class_exists($elemType) && is_subclass_of($elemType, self::class)) {
+                if (!is_array($v) && !is_object($v)) {
+                    throw new LogicException(
+                        static::class . "::{$prop->getName()}[$k] は {$elemType} ですが array/object ではありません"
+                    );
+                }
                 $out[$k] = $elemType::fromResponse($v);
+                continue;
             }
-            return $out;
+
+            throw new LogicException(
+                static::class . "::{$prop->getName()} の配列要素型 {$elemType} は変換規則が定義されていません"
+            );
         }
 
-        // その他
-        return $value;
+        return $out;
+    }
+
+    /**
+     * DocBlock 上の型名を実行時に解決可能なクラス名へ補正する。
+     *
+     * 対応:
+     * - 完全修飾名: Foo\Bar\Baz
+     * - 同一namespaceの短縮名: Baz -> DeclaringClassのnamespace\Baz
+     *
+     * 非対応:
+     * - use import / alias の解決
+     */
+    private static function resolveDocblockTypeName(ReflectionProperty $prop, string $typeName): string
+    {
+        // すでに存在するならそのまま
+        if (class_exists($typeName) || enum_exists($typeName)) {
+            return $typeName;
+        }
+
+        // 先頭 \ は除去して再確認
+        $trimmed = ltrim($typeName, '\\');
+        if (class_exists($trimmed) || enum_exists($trimmed)) {
+            return $trimmed;
+        }
+
+        // namespace を補完
+        if (!str_contains($trimmed, '\\')) {
+            $namespace = $prop->getDeclaringClass()->getNamespaceName();
+            $candidate = $namespace . '\\' . $trimmed;
+
+            if (class_exists($candidate) || enum_exists($candidate)) {
+                return $candidate;
+            }
+        }
+
+        return $trimmed;
     }
 }

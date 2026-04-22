@@ -1,7 +1,7 @@
 {
     "name": "keisukesaichi/api-dto",
     "license": "MIT",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "autoload": {
         "psr-4": {
             "ApiDto\\": "ApiDto/"
